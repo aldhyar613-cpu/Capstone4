@@ -1,0 +1,12 @@
+# ----- Core -----
+ultralytics==8.4.54
+supervision==0.28.0
+streamlit>=1.32.0
+
+# ----- Visualisasi -----
+plotly==6.7.0
+pandas>=2.0.0
+
+# ----- Jupyter (notebook training, opsional) -----
+jupyter==1.1.1
+ipykernel==6.29.5
