@@ -16,10 +16,6 @@ __pycache__/
 .vscode/
 .idea/
 
-# File Model Weights (YOLO .pt)
-# Catatan: GitHub membatasi ukuran file maksimal 100MB. 
-# Jika file best.pt atau best_video.pt kamu ukurannya besar, aktifkan ini:
-models/*.pt
 
 # File Sampah / Hasil Tes Lokal (Opsional tapi disarankan)
 tools/frames/
