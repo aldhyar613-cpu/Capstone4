@@ -4,7 +4,7 @@ app/detector.py — Logika Deteksi Kendaraan menggunakan YOLOv11 (Dynamic Render
 Berisi semua fungsi inti untuk:
   - Load model YOLO dari file .pt
   - Deteksi kendaraan pada gambar (PIL Image) dengan bounding box proporsional
-  - Deteksi + counting kendaraan pada video dengan skala teks dinamis
+  - Deteksi kendaraan pada video (tanpa counting) dengan skala teks dinamis
   - Gambar bounding box di atas gambar
 """
 
@@ -39,7 +39,7 @@ def load_model(model_path: str) -> YOLO:
 
 
 # ─────────────────────────────────────────────
-# DETEKSI GAMBAR
+# DETEKSI GAMBAR  ← TIDAK DIUBAH SAMA SEKALI
 # ─────────────────────────────────────────────
 
 def detect_vehicles(
@@ -93,7 +93,7 @@ def detect_vehicles(
 
 
 # ─────────────────────────────────────────────
-# DETEKSI VIDEO
+# DETEKSI VIDEO  ← DIUBAH: tanpa tracking & counting
 # ─────────────────────────────────────────────
 
 def detect_vehicles_video(
@@ -103,11 +103,11 @@ def detect_vehicles_video(
     confidence        : float = 0.5,
     iou_threshold     : float = 0.45,
     model_type        : str   = "cctv",
-    line_position     : float = 0.5,   # Tidak dipakai lagi
     progress_callback         = None
 ) -> dict:
     """
-    Mendeteksi kendaraan dalam video dengan skala rendering yang dinamis.
+    Mendeteksi kendaraan dalam video dengan bounding box dinamis.
+    Hanya deteksi per frame — tanpa tracking ID dan tanpa vehicle counting.
     """
     config       = get_config(model_type)
     class_list   = config["classes"]
@@ -124,24 +124,20 @@ def detect_vehicles_video(
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out    = cv2.VideoWriter(output_path, fourcc, fps_video, (width, height))
 
-    # ── Kalkulasi Ukuran Grafis Dinamis Berdasarkan Resolusi Video ──
-    base_size = max(width, height)
-    thickness = max(2, int(base_size / 700))
-    font_scale = max(0.4, base_size / 1800)
+    # ── Kalkulasi ukuran grafis dinamis ──────
+    base_size      = max(width, height)
+    thickness      = max(2, int(base_size / 700))
+    font_scale     = max(0.4, base_size / 1800)
     font_thickness = max(1, int(base_size / 1200))
-    
-    # Skala untuk papan skor teks di pojok kiri atas video
-    overlay_scale = max(0.5, base_size / 1600)
+
+    overlay_scale     = max(0.5, base_size / 1600)
     overlay_thickness = max(1, int(base_size / 1100))
-    line_step = int(42 * overlay_scale)
+    line_step         = int(42 * overlay_scale)
 
-    # ── Counter kendaraan ────────────────────
-    total_counts = {cls: 0 for cls in class_list}
-    counted_ids  = set()
-    frame_count  = 0
-    fps_list     = []
+    frame_count = 0
+    fps_list    = []
 
-    print(f"[INFO] Memproses video: {total_frames} frame dengan skala dinamis...")
+    print(f"[INFO] Memproses video: {total_frames} frame (detection only, no counting)...")
 
     while True:
         ret, frame = cap.read()
@@ -149,21 +145,14 @@ def detect_vehicles_video(
             break
 
         frame_count += 1
-        t_start      = time.time()
+        t_start = time.time()
 
-        # ── Inferensi + tracking ──────────────
-        results = model.track(
-            frame,
-            conf    = confidence,
-            iou     = iou_threshold,
-            persist = True,
-            verbose = False
-        )[0]
-
+        # ── Inferensi biasa (tanpa .track) ───
+        results     = model(frame, conf=confidence, iou=iou_threshold, verbose=False)[0]
         class_names = results.names
         boxes       = results.boxes
 
-        # ── Proses tiap bounding box ──────────
+        # ── Gambar bounding box per deteksi ──
         for box in boxes:
             cls_id   = int(box.cls)
             cls_name = class_names[cls_id]
@@ -171,55 +160,46 @@ def detect_vehicles_video(
             xyxy     = box.xyxy[0].tolist()
             x1, y1, x2, y2 = [int(v) for v in xyxy]
 
-            track_id = int(box.id[0]) if box.id is not None else None
+            # Lewati kelas yang tidak ada di config
+            if cls_name not in class_list:
+                continue
 
-            # ── Vehicle Counting ──
-            if track_id is not None and cls_name in total_counts:
-                key = (track_id, cls_name)
-                if key not in counted_ids:
-                    total_counts[cls_name] += 1
-                    counted_ids.add(key)
-
-            # ── Gambar bounding box dengan ketebalan dinamis ──
             color = class_colors.get(cls_name, (255, 255, 255))
+
+            # Kotak bounding box dinamis
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-            # Label teks
-            label = f"{cls_name} {conf_val:.2f}"
-            if track_id is not None:
-                label = f"#{track_id} {label}"
-
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+            # Label: nama kelas + confidence
+            label       = f"{cls_name} {conf_val:.2f}"
+            (tw, th), _ = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
+            )
             y1_label = max(y1, th + int(10 * font_scale))
 
-            # Gambar background label & teks dinamis
-            cv2.rectangle(frame, (x1, y1_label - th - int(8 * font_scale)), (x1 + tw + int(4 * font_scale), y1_label), color, -1)
-            cv2.putText(frame, label, (x1 + int(2 * font_scale), y1_label - int(4 * font_scale)),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness)
+            cv2.rectangle(
+                frame,
+                (x1, y1_label - th - int(8 * font_scale)),
+                (x1 + tw + int(4 * font_scale), y1_label),
+                color, -1
+            )
+            cv2.putText(
+                frame, label,
+                (x1 + int(2 * font_scale), y1_label - int(4 * font_scale)),
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness
+            )
 
-        # ── Hitung FPS ────────────────────────
+        # ── Hitung & tampilkan FPS di pojok kiri atas ──
         t_end   = time.time()
         fps_cur = 1.0 / (t_end - t_start + 1e-9)
         fps_list.append(fps_cur)
 
-        # ── Papan Skor Teks di Pojok Kiri Atas (Dinamis) ──
-        overlay_y = line_step
-        cv2.putText(frame, f"FPS: {fps_cur:.1f}", (int(15 * overlay_scale), overlay_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, overlay_scale, (255, 255, 255), overlay_thickness)
-        overlay_y += line_step
+        cv2.putText(
+            frame, f"FPS: {fps_cur:.1f}",
+            (int(15 * overlay_scale), line_step),
+            cv2.FONT_HERSHEY_SIMPLEX, overlay_scale, (255, 255, 255), overlay_thickness
+        )
 
-        for cls in class_list:
-            color = class_colors.get(cls, (255, 255, 255))
-            label = f"{cls}: {total_counts[cls]}"
-            cv2.putText(frame, label, (int(15 * overlay_scale), overlay_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, overlay_scale, color, overlay_thickness)
-            overlay_y += line_step
-
-        total_now = sum(total_counts.values())
-        cv2.putText(frame, f"TOTAL: {total_now}", (int(15 * overlay_scale), overlay_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, overlay_scale * 1.1, (255, 255, 0), overlay_thickness + 1)
-
-        # ── Tulis frame ke output video ───────
+        # ── Tulis frame ke output ─────────────
         out.write(frame)
 
         if progress_callback:
@@ -231,16 +211,14 @@ def detect_vehicles_video(
     fps_avg = sum(fps_list) / len(fps_list) if fps_list else 0
 
     return {
-        "total_counts": total_counts,
-        "total"       : sum(total_counts.values()),
-        "fps_avg"     : round(fps_avg, 1),
-        "output_path" : output_path,
-        "frame_count" : frame_count,
+        "fps_avg"    : round(fps_avg, 1),
+        "output_path": output_path,
+        "frame_count": frame_count,
     }
 
 
 # ─────────────────────────────────────────────
-# GAMBAR BOUNDING BOX (untuk gambar statis)
+# GAMBAR BOUNDING BOX  ← TIDAK DIUBAH SAMA SEKALI
 # ─────────────────────────────────────────────
 
 def draw_boxes(
@@ -254,10 +232,9 @@ def draw_boxes(
     img_array = np.array(image)
     img_bgr   = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-    # Hitung skala dinamis berdasarkan sisi terpanjang gambar
     height, width, _ = img_bgr.shape
     base_size = max(width, height)
-    
+
     thickness      = max(2, int(base_size / 700))
     font_scale     = max(0.4, base_size / 1800)
     font_thickness = max(1, int(base_size / 1200))
@@ -268,17 +245,23 @@ def draw_boxes(
         x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
         color           = class_colors.get(cls_name, (255, 255, 255))
 
-        # Gambar kotak dinamis
         cv2.rectangle(img_bgr, (x1, y1), (x2, y2), color, thickness)
 
-        # Label background + teks dinamis
         label       = f"{cls_name} {conf:.2f}"
         (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
         y1_label    = max(y1, th + int(10 * font_scale))
 
-        cv2.rectangle(img_bgr, (x1, y1_label - th - int(8 * font_scale)), (x1 + tw + int(4 * font_scale), y1_label), color, -1)
-        cv2.putText(img_bgr, label, (x1 + int(2 * font_scale), y1_label - int(4 * font_scale)),
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness)
+        cv2.rectangle(
+            img_bgr,
+            (x1, y1_label - th - int(8 * font_scale)),
+            (x1 + tw + int(4 * font_scale), y1_label),
+            color, -1
+        )
+        cv2.putText(
+            img_bgr, label,
+            (x1 + int(2 * font_scale), y1_label - int(4 * font_scale)),
+            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness
+        )
 
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     return Image.fromarray(img_rgb)
